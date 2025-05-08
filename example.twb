@@ -1,0 +1,155 @@
+<?xml version='1.0' encoding='utf-8'?>
+<workbook xmlns="http://tableausoftware.com/xml/user" version="18.1">
+  <datasources>
+    <datasource name="Sales" hasextract="false" inline="true">
+      <column name="[Sales]" datatype="real"/>
+      <column name="[Profit]" datatype="real"/>
+      <column name="[Discount]" datatype="real"/>
+      <column name="[Order Date]" datatype="date"/>
+      <column name="[Region]" datatype="string"/>
+      <column name="[Customer ID]" datatype="string"/>
+
+      <column name="[Profit Ratio]" datatype="real">
+        <calculation class="tableau" formula="[Profit]/[Sales]"/>
+      </column>
+      <column name="[Adjusted Sales]" datatype="real">
+        <calculation class="tableau" formula="[Sales] * (1 - [Discount])"/>
+      </column>
+      <column name="[Sales LOD]" datatype="real">
+        <calculation class="tableau" formula="{ FIXED [Customer ID] : SUM([Sales]) }"/>
+      </column>
+      <column name="[Running Sales]" datatype="real">
+        <calculation class="tableau" formula="RUNNING_SUM(SUM([Sales]))"/>
+      </column>
+
+      <!-- Cross-source calculation #1 -->
+      <column name="[Blended Profitability Score]" datatype="real">
+        <calculation class="tableau" formula="
+IF [Customers].[Customer Score] > 80 AND [Sales].[Profit] > 500 AND [Products].[Final Price] > 100 THEN
+  ([Sales].[Profit] * [Customers].[Customer Score]) / [Products].[Final Price]
+ELSE
+  0
+END
+"/>
+      </column>
+    </datasource>
+
+    <datasource name="Customers" hasextract="false" inline="true">
+      <column name="[Customer ID]" datatype="string"/>
+      <column name="[Customer Segment]" datatype="string"/>
+      <column name="[Region]" datatype="string"/>
+      <column name="[Name]" datatype="string"/>
+
+      <column name="[VIP Flag]" datatype="boolean">
+        <calculation class="tableau" formula="[Customer Segment] = 'VIP'"/>
+      </column>
+      <column name="[Customer Score]" datatype="real">
+        <calculation class="tableau" formula="IF [VIP Flag] THEN 100 ELSE 50 END"/>
+      </column>
+    </datasource>
+
+    <datasource name="Products" hasextract="false" inline="true">
+      <column name="[Product ID]" datatype="string"/>
+      <column name="[Sub-Category]" datatype="string"/>
+      <column name="[Category]" datatype="string"/>
+      <column name="[Base Price]" datatype="real"/>
+      <column name="[Margin]" datatype="real"/>
+      <column name="[Final Price]" datatype="real">
+        <calculation class="tableau" formula="[Base Price] + ([Base Price] * [Margin])"/>
+      </column>
+
+      <!-- Cross-source calculation #2 -->
+      <column name="[Cross Source Profit Check]" datatype="string">
+        <calculation class="tableau" formula="
+IF [Sales].[Profit Ratio] > 0.2 AND [Customers].[Customer Score] > 75 THEN 'High Margin High Value'
+ELSEIF [Sales].[Profit Ratio] < 0.1 AND [Customers].[Customer Score] < 50 THEN 'Low Margin Low Value'
+ELSE 'Mid Tier'
+"/>
+      </column>
+    </datasource>
+  </datasources>
+
+  <parameters>
+    <parameter name="Sales Cutoff" datatype="real" current-value="1000">
+      <range min="0" max="10000"/>
+    </parameter>
+    <parameter name="Selected Category" datatype="string" current-value="Furniture">
+      <list>
+        <member value="Furniture"/>
+        <member value="Office Supplies"/>
+        <member value="Technology"/>
+      </list>
+    </parameter>
+  </parameters>
+
+  <worksheets>
+    <worksheet name="Sales View">
+      <table>
+        <view>
+          <view-item column="Sales"/>
+          <view-item column="Profit"/>
+          <view-item column="Profit Ratio"/>
+          <view-item column="Adjusted Sales"/>
+          <view-item column="Blended Profitability Score"/>
+        </view>
+      </table>
+    </worksheet>
+
+    <worksheet name="Customer Detail">
+      <table>
+        <view>
+          <view-item column="Customer ID"/>
+          <view-item column="Customer Segment"/>
+          <view-item column="VIP Flag"/>
+          <view-item column="Customer Score"/>
+        </view>
+      </table>
+    </worksheet>
+
+    <worksheet name="Product Metrics">
+      <table>
+        <view>
+          <view-item column="Category"/>
+          <view-item column="Final Price"/>
+          <view-item column="Cross Source Profit Check"/>
+        </view>
+      </table>
+    </worksheet>
+
+    <worksheet name="Combined Dashboard Logic">
+      <table>
+        <view>
+          <view-item column="Sales"/>
+          <view-item column="Profit"/>
+          <view-item column="Customer Score"/>
+          <view-item column="Final Price"/>
+        </view>
+      </table>
+    </worksheet>
+  </worksheets>
+
+  <dashboards>
+    <dashboard name="Full Executive Dashboard">
+      <dashboard-item type="worksheet" name="Sales View"/>
+      <dashboard-item type="worksheet" name="Customer Detail"/>
+      <dashboard-item type="worksheet" name="Product Metrics"/>
+      <dashboard-item type="worksheet" name="Combined Dashboard Logic"/>
+    </dashboard>
+  </dashboards>
+
+  <actions>
+    <action name="Region Filter" type="filter">
+      <source-sheet>Sales View</source-sheet>
+      <target-sheet>Customer Detail</target-sheet>
+      <source-field>Region</source-field>
+      <target-field>Region</target-field>
+    </action>
+  </actions>
+
+  <hierarchies>
+    <hierarchy name="Product Hierarchy">
+      <level name="Category"/>
+      <level name="Sub-Category"/>
+    </hierarchy>
+  </hierarchies>
+</workbook>
