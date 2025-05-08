@@ -45,15 +45,18 @@ env/
 Repository/
 
 # Project specific
+# Output files and reports
+output_files/
+**/output_files/
 *.csv
 !example/*.csv
 *.log
+*.md
+!README.md
+!LICENSE.md
 .env
 .env.*
 
 # Jupyter Notebook
 .ipynb_checkpoints
-*.ipynb
-
-# New additions from the code block
-output_files/ 
+*.ipynb 
