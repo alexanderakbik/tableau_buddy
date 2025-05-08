@@ -2,7 +2,16 @@
 
 A Python tool for analyzing Tableau workbooks (.twb/.twbx) and generating comprehensive reports and DBT project suggestions.
 
-Current version: 1.0.0
+Current version: 1.1.0
+
+## Changelog
+
+### 1.1.0
+- Improved XML namespace handling for broader Tableau compatibility
+- Added robust file encoding detection using chardet
+- Enhanced error handling and logging
+- Default output path for documentation generation
+- Updated requirements.txt for new dependencies and versioning
 
 ## Features
 

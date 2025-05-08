@@ -176,7 +176,28 @@ def main():
     
     try:
         doc_generator = TableauWorkbookDocumentation(args.workbook_path)
-        doc_generator.generate_documentation(args.output)
+        
+        # Use default output path if none provided
+        output_path = args.output
+        if not output_path:
+            output_dir = Path("output_files")
+            output_dir.mkdir(exist_ok=True)
+            output_path = output_dir / "workbook_documentation.md"
+        
+        documentation = doc_generator.generate_documentation(output_path)
+        print(f"\nDocumentation generated successfully!")
+        print(f"Output saved to: {output_path}")
+        
+        # Print a summary to console
+        print("\nSummary:")
+        print(f"- Total Sheets: {len(doc_generator.analyzer.sheets)}")
+        print(f"- Total Dashboards: {len(doc_generator.analyzer.dashboards)}")
+        print(f"- Total Data Sources: {len(doc_generator.analyzer.data_sources)}")
+        print(f"- Total Calculations: {len(doc_generator.analyzer.calculations)}")
+        print(f"- Total Parameters: {len(doc_generator.analyzer.parameters)}")
+        print(f"- Total Actions: {len(doc_generator.analyzer.actions)}")
+        print(f"- Total Hierarchies: {len(doc_generator.analyzer.hierarchies)}")
+        
     except Exception as e:
         logger.error(f"Failed to generate documentation: {e}")
         raise

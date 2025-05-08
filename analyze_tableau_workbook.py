@@ -2,15 +2,17 @@ import os
 import pandas as pd
 from lxml import etree
 import zipfile
-from typing import Dict, List, Optional, Any, Set
+from typing import Dict, List, Optional, Any, Set, Union
 from dataclasses import dataclass
 import logging
 import sys
 from pathlib import Path
 import re
+import chardet
+from contextlib import contextmanager
 
 # Version information
-__version__ = '1.0.0'
+__version__ = '1.1.0'
 
 # Configure logging
 logging.basicConfig(
@@ -18,6 +20,18 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+class TableauWorkbookError(Exception):
+    """Base exception for Tableau workbook analysis errors."""
+    pass
+
+class XMLParsingError(TableauWorkbookError):
+    """Exception raised when XML parsing fails."""
+    pass
+
+class FileEncodingError(TableauWorkbookError):
+    """Exception raised when file encoding cannot be determined."""
+    pass
 
 @dataclass
 class DataSource:
@@ -33,27 +47,26 @@ class Parameter:
     current_value: str
     range_min: Optional[str]
     range_max: Optional[str]
-    allowed_values: List[str]  # For list parameters
+    allowed_values: List[str]
     used_in: List[str]
-    used_in_calculations: List[str]  # Track which calculations use this parameter
+    used_in_calculations: List[str]
 
 @dataclass
 class Calculation:
     name: str
     formula: str
     used_in: List[str]
-    dependencies: Set[str]  # Other calculations this one depends on
-    parameters_used: Set[str]  # Parameters used in this calculation
-    datasource: str  # Data source this calculation belongs to
+    dependencies: Set[str]
+    parameters_used: Set[str]
+    datasource: str
 
 @dataclass
 class Sheet:
     name: str
-    datasources: List[str]  # Changed from single datasource to list
+    datasources: List[str]
     calculations_used: List[str]
     parameters_used: List[str]
-    # To store filter details for architectural recommendations
-    filters_used: List[Dict[str, str]] 
+    filters_used: List[Dict[str, str]]
 
 @dataclass
 class Dashboard:
@@ -68,8 +81,8 @@ class Action:
     target_sheet: str
     source_field: str
     target_field: str
-    url: Optional[str]  # For URL actions
-    target_dashboard: Optional[str]  # For navigation actions
+    url: Optional[str]
+    target_dashboard: Optional[str]
 
 @dataclass
 class Hierarchy:
@@ -79,13 +92,13 @@ class Hierarchy:
 
 class TableauWorkbookAnalyzer:
     # Support multiple versions of Tableau namespaces
-    TABLEAU_NAMESPACES = [
+    TABLEAU_NAMESPACES: List[str] = [
         "http://tableausoftware.com/xml/user",
         "http://www.tableausoftware.com/xml/user",
         "http://tableau.com/xml/user"
     ]
     
-    def __init__(self, workbook_path: str):
+    def __init__(self, workbook_path: Union[str, Path]) -> None:
         self.workbook_path = Path(workbook_path)
         self.xml_content: Optional[str] = None
         self.root: Optional[etree._Element] = None
@@ -97,6 +110,17 @@ class TableauWorkbookAnalyzer:
         self.actions: Dict[str, Action] = {}
         self.hierarchies: Dict[str, Hierarchy] = {}
         self.ns: Dict[str, str] = {}  # Will be set during XML parsing
+
+    @contextmanager
+    def _safe_file_operation(self, mode: str = 'r'):
+        """Context manager for safe file operations."""
+        file_handle = None
+        try:
+            file_handle = open(self.workbook_path, mode)
+            yield file_handle
+        finally:
+            if file_handle is not None:
+                file_handle.close()
 
     def find_parameter_references(self, text: str) -> Set[str]:
         """Find all parameter references in a text, handling both bracketed and unbracketed forms.
@@ -132,30 +156,56 @@ class TableauWorkbookAnalyzer:
         return refs
 
     def extract_xml(self) -> None:
-        """Extract XML content from TWBX or TWB file."""
+        """Extract XML content from TWBX or TWB file with improved error handling."""
         try:
             if self.workbook_path.suffix.lower() == '.twbx':
                 with zipfile.ZipFile(self.workbook_path, 'r') as zip_ref:
                     twb_files = [f for f in zip_ref.namelist() if f.endswith('.twb')]
                     if not twb_files:
-                        raise ValueError("No .twb file found in TWBX package")
+                        raise TableauWorkbookError("No .twb file found in TWBX package")
                     
                     twb_file = twb_files[0]
                     logger.info(f"Using TWB file: {twb_file}")
-                    self.xml_content = zip_ref.read(twb_file).decode('utf-8')
+                    self.xml_content = zip_ref.read(twb_file)
             else:
-                with open(self.workbook_path, 'r', encoding='utf-8') as f:
+                with open(self.workbook_path, 'rb') as f:
                     self.xml_content = f.read()
+
+            # Detect file encoding
+            result = chardet.detect(self.xml_content)
+            if not result['encoding']:
+                raise FileEncodingError("Could not detect file encoding")
             
-            parser = etree.XMLParser(recover=True, huge_tree=True) # Added huge_tree for large workbooks
-            self.root = etree.fromstring(self.xml_content.encode('utf-8'), parser=parser)
+            try:
+                self.xml_content = self.xml_content.decode(result['encoding'])
+            except UnicodeDecodeError as e:
+                raise FileEncodingError(f"Failed to decode file with detected encoding {result['encoding']}: {e}")
+
+            # Configure XML parser with error handling
+            parser = etree.XMLParser(
+                recover=True,
+                huge_tree=True,
+                remove_blank_text=True,
+                remove_comments=True,
+                remove_pis=True
+            )
+            
+            try:
+                self.root = etree.fromstring(self.xml_content.encode('utf-8'), parser=parser)
+            except etree.XMLSyntaxError as e:
+                raise XMLParsingError(f"Failed to parse XML content: {e}")
+            
+            # Validate root element
+            if self.root is None:
+                raise XMLParsingError("XML parsing resulted in empty root element")
             
             # Try to find the namespace in the root element's nsmap
             ns_found = False
             if hasattr(self.root, 'nsmap'):
                 for prefix, uri in self.root.nsmap.items():
                     if uri in self.TABLEAU_NAMESPACES:
-                        self.ns = {'t': uri}  # Always use 't' as the prefix
+                        # Support both 't' and 'user' prefixes
+                        self.ns = {'t': uri, 'user': uri}
                         ns_found = True
                         break
             
@@ -165,34 +215,61 @@ class TableauWorkbookAnalyzer:
                 if '{' in root_tag:
                     ns_uri = root_tag[root_tag.find('{')+1:root_tag.find('}')]
                     if ns_uri in self.TABLEAU_NAMESPACES:
-                        self.ns = {'t': ns_uri}
+                        self.ns = {'t': ns_uri, 'user': ns_uri}
                         ns_found = True
             
             # If still not found, try default namespace
             if not ns_found:
-                self.ns = {'t': self.TABLEAU_NAMESPACES[0]}
+                self.ns = {'t': self.TABLEAU_NAMESPACES[0], 'user': self.TABLEAU_NAMESPACES[0]}
                 logger.warning("No Tableau namespace found, using default.")
             
             logger.info(f"Using namespace: {self.ns}")
             
+            # Validate XML structure
+            if not self._validate_xml_structure():
+                raise XMLParsingError("Invalid Tableau workbook structure")
+            
+        except zipfile.BadZipFile:
+            raise TableauWorkbookError(f"Invalid TWBX file: {self.workbook_path}")
+        except FileNotFoundError:
+            raise TableauWorkbookError(f"Workbook file not found: {self.workbook_path}")
         except Exception as e:
-            logger.error(f"Failed to extract XML from workbook: {e}")
-            raise
+            raise TableauWorkbookError(f"Failed to extract XML from workbook: {e}")
+
+    def _validate_xml_structure(self) -> bool:
+        """Validate the basic structure of the Tableau workbook XML."""
+        try:
+            # Check for essential elements with both namespace prefixes
+            essential_paths = [
+                './/t:workbook', './/user:workbook',
+                './/t:datasources', './/user:datasources',
+                './/t:worksheets', './/user:worksheets'
+            ]
+            
+            for path in essential_paths:
+                if self._xpath(self.root, path):
+                    return True
+            
+            logger.error("Missing essential elements in workbook structure")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to validate XML structure: {e}")
+            return False
 
     def _xpath(self, element: etree._Element, path: str) -> List[etree._Element]:
         """Helper method to execute XPath with the determined namespace."""
         try:
-            # Try with namespace first
+            # Try with both namespace prefixes
             results = element.xpath(path, namespaces=self.ns)
             
             if not results:
                 # Try without namespace prefix
-                path_no_ns = path.replace('t:', '')
+                path_no_ns = path.replace('t:', '').replace('user:', '')
                 results = element.xpath(path_no_ns)
                 
                 if not results:
                     # Try with namespace but without prefix
-                    path_with_ns = path.replace('t:', '')
+                    path_with_ns = path.replace('t:', '').replace('user:', '')
                     results = element.xpath(path_with_ns, namespaces=self.ns)
             
             return results
@@ -1204,89 +1281,83 @@ def main():
             sys.exit(1)
             
         # Create output directory
-        output_dir = "output_files"
-        os.makedirs(output_dir, exist_ok=True)
+        output_dir = Path("output_files")
+        output_dir.mkdir(exist_ok=True)
         
         logger.info(f"Starting analysis of workbook: {workbook_path}")
         analyzer = TableauWorkbookAnalyzer(workbook_path)
         
-        logger.info("Step 1: Extracting XML content...")
-        analyzer.extract_xml()
-        if analyzer.root is None:
-            logger.error("XML root not parsed. Aborting analysis.")
-            sys.exit(1)
+        try:
+            logger.info("Step 1: Extracting XML content...")
+            analyzer.extract_xml()
+            if analyzer.root is None:
+                raise XMLParsingError("XML root not parsed. Aborting analysis.")
 
-        logger.info("Step 2: Extracting parameters...")
-        analyzer.extract_parameters()
-        logger.info(f"Found {len(analyzer.parameters)} parameters.")
-        
-        logger.info("Step 3: Extracting data sources...")
-        analyzer.extract_data_sources()
-        logger.info(f"Found {len(analyzer.data_sources)} data sources.")
-        
-        logger.info("Step 4: Extracting calculated fields...")
-        analyzer.extract_calculations() # Depends on parameters being extracted
-        logger.info(f"Found {len(analyzer.calculations)} calculated fields.")
-        
-        logger.info("Step 5: Extracting sheets and their dependencies...")
-        analyzer.extract_sheets() # Depends on calculations and parameters
-        logger.info(f"Found {len(analyzer.sheets)} worksheets.")
-        
-        logger.info("Step 6: Extracting dashboards...")
-        analyzer.extract_dashboards() # Depends on sheets
-        logger.info(f"Found {len(analyzer.dashboards)} dashboards.")
-        
-        logger.info("Step 7: Extracting actions...")
-        analyzer.extract_actions()
-        logger.info(f"Found {len(analyzer.actions)} actions.")
-        
-        logger.info("Step 8: Extracting hierarchies...")
-        analyzer.extract_hierarchies() # Depends on data sources
-        logger.info(f"Found {len(analyzer.hierarchies)} hierarchies.")
-        
-        logger.info("Step 9: Generating reports...")
-        
-        ReportGenerator.generate_data_sources_report(
-            analyzer.data_sources, os.path.join(output_dir, 'data_sources_report.csv'))
-        ReportGenerator.generate_calculations_report(
-            analyzer.calculations, os.path.join(output_dir, 'calculations_report.csv'))
-        ReportGenerator.generate_sheets_report(
-            analyzer.sheets, os.path.join(output_dir, 'sheets_report.csv'))
-        ReportGenerator.generate_parameters_report(
-            analyzer.parameters, os.path.join(output_dir, 'parameters_report.csv'))
-        ReportGenerator.generate_dashboards_report(
-            analyzer.dashboards, os.path.join(output_dir, 'dashboards_report.csv'))
-        ReportGenerator.generate_actions_report(
-            analyzer.actions, os.path.join(output_dir, 'actions_report.csv'))
-        ReportGenerator.generate_hierarchies_report(
-            analyzer.hierarchies, os.path.join(output_dir, 'hierarchies_report.csv'))
-        ReportGenerator.generate_summary_report(
-            analyzer, os.path.join(output_dir, 'workbook_summary.csv'))
-        
-        # Generate new recommendation reports
-        ReportGenerator.generate_backend_offload_recommendations(
-            analyzer, os.path.join(output_dir, 'backend_offload_recommendations.csv'))
-        ReportGenerator.generate_architecture_recommendations(
-            analyzer, os.path.join(output_dir, 'architecture_recommendations.md'))
-        
-        # Generate DBT project
-        dbt_generator = DBTProjectGenerator(analyzer, output_dir)
-        dbt_generator.generate_project()
-        
-        logger.info("Analysis complete! Generated reports and DBT project in 'output_files' directory.")
-        print("\nAnalysis complete! Generated files in 'output_files' directory:")
-        for report_file in sorted(os.listdir(output_dir)):
-            print(f"- {report_file}")
-        
-        print(f"\nSummary: Found {len(analyzer.calculations)} calculations, {len(analyzer.parameters)} parameters, and {len(analyzer.sheets)} sheets.")
-        print(f"A suggested DBT project has been generated in {os.path.join(output_dir, 'suggested_dbt_project')}")
-        
+            logger.info("Step 2: Extracting parameters...")
+            analyzer.extract_parameters()
+            logger.info(f"Found {len(analyzer.parameters)} parameters.")
+            
+            logger.info("Step 3: Extracting data sources...")
+            analyzer.extract_data_sources()
+            logger.info(f"Found {len(analyzer.data_sources)} data sources.")
+            
+            logger.info("Step 4: Extracting calculated fields...")
+            analyzer.extract_calculations()
+            logger.info(f"Found {len(analyzer.calculations)} calculated fields.")
+            
+            logger.info("Step 5: Extracting sheets and their dependencies...")
+            analyzer.extract_sheets()
+            logger.info(f"Found {len(analyzer.sheets)} worksheets.")
+            
+            logger.info("Step 6: Extracting dashboards...")
+            analyzer.extract_dashboards()
+            logger.info(f"Found {len(analyzer.dashboards)} dashboards.")
+            
+            logger.info("Step 7: Extracting actions...")
+            analyzer.extract_actions()
+            logger.info(f"Found {len(analyzer.actions)} actions.")
+            
+            logger.info("Step 8: Extracting hierarchies...")
+            analyzer.extract_hierarchies()
+            logger.info(f"Found {len(analyzer.hierarchies)} hierarchies.")
+            
+            logger.info("Step 9: Generating reports...")
+            
+            ReportGenerator.generate_data_sources_report(
+                analyzer.data_sources, output_dir / 'data_sources_report.csv')
+            ReportGenerator.generate_calculations_report(
+                analyzer.calculations, output_dir / 'calculations_report.csv')
+            ReportGenerator.generate_sheets_report(
+                analyzer.sheets, output_dir / 'sheets_report.csv')
+            ReportGenerator.generate_parameters_report(
+                analyzer.parameters, output_dir / 'parameters_report.csv')
+            ReportGenerator.generate_dashboards_report(
+                analyzer.dashboards, output_dir / 'dashboards_report.csv')
+            ReportGenerator.generate_actions_report(
+                analyzer.actions, output_dir / 'actions_report.csv')
+            ReportGenerator.generate_hierarchies_report(
+                analyzer.hierarchies, output_dir / 'hierarchies_report.csv')
+            ReportGenerator.generate_summary_report(
+                analyzer, output_dir / 'workbook_summary.csv')
+            
+            # Generate new recommendation reports
+            ReportGenerator.generate_backend_offload_recommendations(
+                analyzer, output_dir / 'backend_offload_recommendations.csv')
+            ReportGenerator.generate_architecture_recommendations(
+                analyzer, output_dir / 'architecture_recommendations.md')
+            
+            logger.info("Analysis completed successfully!")
+            
+        except TableauWorkbookError as e:
+            logger.error(f"Analysis failed: {e}")
+            sys.exit(1)
+        except Exception as e:
+            logger.error(f"Unexpected error during analysis: {e}", exc_info=True)
+            sys.exit(1)
+            
     except Exception as e:
-        logger.error(f"Analysis failed: {e}", exc_info=True)
-        print(f"\nError during analysis: {e}")
+        logger.error(f"Failed to initialize analysis: {e}", exc_info=True)
         sys.exit(1)
 
 if __name__ == "__main__":
-    # Example usage (for testing in an IDE):
-    # sys.argv.append('path/to/your/workbook.twbx') 
     main()
