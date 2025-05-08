@@ -94,16 +94,32 @@ class TableauWorkbookAnalyzer:
         self.ns: Dict[str, str] = {}  # Will be set during XML parsing
 
     def find_parameter_references(self, text: str) -> Set[str]:
-        """Find all parameter references in a text, handling both bracketed and unbracketed forms."""
+        """Find all parameter references in a text, handling both bracketed and unbracketed forms.
+        
+        Uses improved regex pattern matching to find parameter references in formulas,
+        avoiding false positives by checking word boundaries.
+        """
         refs = set()
+        if not text or not self.parameters:
+            return refs
+            
+        # Check all parameter references using regex with word boundaries
         for param_name in self.parameters.keys():
-            # Check for bracketed form
-            if f'[{param_name}]' in text:
+            # Check for bracketed form - exact match with brackets
+            bracketed_pattern = fr'\[{re.escape(param_name)}\]'
+            if re.search(bracketed_pattern, text):
                 refs.add(param_name)
-            # Check for unbracketed form in various contexts
-            pattern = fr'\b{re.escape(param_name)}\b'
-            if re.search(pattern, text):
-                refs.add(param_name)
+                continue
+                
+            # Check for unbracketed form with word boundaries to avoid partial matches
+            unbracketed_pattern = fr'\b{re.escape(param_name)}\b'
+            if re.search(unbracketed_pattern, text):
+                # Avoid false positives by checking common function names or keywords
+                # that might match parameter names accidentally
+                false_positive_prefixes = ['IF(', 'WHEN ', 'THEN ', 'ELSE ', 'END ', 'AND ', 'OR ', 'NOT ']
+                if not any(prefix + param_name in text for prefix in false_positive_prefixes):
+                    refs.add(param_name)
+                    
         return refs
 
     def extract_xml(self) -> None:
@@ -341,50 +357,87 @@ class TableauWorkbookAnalyzer:
     def extract_calculations(self) -> None:
         """Extract calculated fields and their formulas."""
         try:
-            # First pass: collect all calculations
-            for column in self._xpath(self.root, './/t:column'):
-                calc = self._find(column, './/t:calculation')
-                if calc is not None:
-                    calc_name = column.get('name', 'Unknown').strip('[]')
-                    formula = calc.get('formula', '').strip()
-                    
-                    # Find parameter references in the formula
-                    param_refs = self.find_parameter_references(formula)
-                    
-                    # Find datasource
-                    datasource_name = ''
-                    datasource = column.getparent()
-                    while datasource is not None and datasource.tag != f'{{{next(iter(self.ns.values()))}}}datasource':
-                        datasource = datasource.getparent()
-                    if datasource is not None:
-                        datasource_name = datasource.get('name', '')
-                    
-                    self.calculations[calc_name] = Calculation(
-                        name=calc_name,
-                        formula=formula,
-                        used_in=[],
-                        dependencies=set(),
-                        parameters_used=param_refs,
-                        datasource=datasource_name
-                    )
-                    
-                    # Update parameter usage information
-                    for param_name in param_refs:
-                        if param_name not in self.parameters[param_name].used_in_calculations:
-                            self.parameters[param_name].used_in_calculations.append(calc_name)
-            
-            # Second pass: identify dependencies between calculations
-            for calc_name, calc in self.calculations.items():
-                for other_calc in self.calculations.keys():
-                    if other_calc != calc_name and f'[{other_calc}]' in calc.formula:
-                        calc.dependencies.add(other_calc)
+            # First pass: Create calculation objects
+            for ds in self._xpath(self.root, './/t:datasource'):
+                datasource_name = ds.get('name', ds.get('caption', 'Unknown'))
+                for column in self._xpath(ds, './/t:column'):
+                    calc = self._find(column, './/t:calculation')
+                    if calc is not None:
+                        calc_name = column.get('name', 'Unknown').strip('[]')
+                        formula = calc.get('formula', '').strip()
                         
-                        # Inherit parameter dependencies
-                        other_calc_obj = self.calculations[other_calc]
-                        calc.parameters_used.update(other_calc_obj.parameters_used)
+                        # Find parameter references in formula
+                        param_refs = self.find_parameter_references(formula)
+
+                        # Create calculation object
+                        self.calculations[calc_name] = Calculation(
+                            name=calc_name,
+                            formula=formula,
+                            used_in=[],  # Will be populated in extract_sheets
+                            dependencies=set(),  # Will be populated in second pass
+                            parameters_used=param_refs,
+                            datasource=datasource_name
+                        )
+                        
+                        # Update parameter's used_in_calculations list
+                        for param_name in param_refs:
+                            if param_name in self.parameters:
+                                if calc_name not in self.parameters[param_name].used_in_calculations:
+                                    self.parameters[param_name].used_in_calculations.append(calc_name)
+
+            # Second pass: Find dependencies between calculations
+            for calc_name, calc in self.calculations.items():
+                # Check each formula for references to other calculations
+                for other_calc_name in list(self.calculations.keys()):  # Use list to avoid dict size changes during iteration
+                    if other_calc_name == calc_name:
+                        continue
+                        
+                    # Check different reference patterns in formulas
+                    # 1. Bracketed reference: "[OtherCalc]"
+                    bracketed_pattern = fr'\[{re.escape(other_calc_name)}\]'
+                    # 2. Unbracketed with dot notation (e.g., "DataSource.OtherCalc")
+                    dotted_pattern = fr'\b{re.escape(other_calc_name)}\b'
+                    
+                    if (re.search(bracketed_pattern, calc.formula) or 
+                        (re.search(dotted_pattern, calc.formula) and not any(kw + other_calc_name in calc.formula 
+                                                                            for kw in ['IF(', 'WHEN ', 'THEN ', 'ELSE ']))):
+                        # Add to dependencies
+                        calc.dependencies.add(other_calc_name)
+                        
+                        # Propagate parameter references from dependent calculations
+                        if other_calc_name in self.calculations:
+                            # Get parameters from dependency
+                            other_calc = self.calculations[other_calc_name]
+                            # Update parameters_used with parameters from dependency
+                            calc.parameters_used.update(other_calc.parameters_used)
+                            
+                            # Recursively get parameters from nested dependencies
+                            self._propagate_parameters(calc, other_calc_name, visited=set())
         except Exception as e:
             logger.error(f"Failed to extract calculations: {e}")
             raise
+            
+    def _propagate_parameters(self, calc: Calculation, dependency_name: str, visited: Set[str]) -> None:
+        """Recursively propagate parameter references from dependencies."""
+        # Avoid circular dependencies
+        if dependency_name in visited:
+            return
+            
+        visited.add(dependency_name)
+        
+        # Get the dependency calculation
+        if dependency_name not in self.calculations:
+            return
+            
+        dependency = self.calculations[dependency_name]
+        
+        # Add parameters from this dependency
+        calc.parameters_used.update(dependency.parameters_used)
+        
+        # Recursively process nested dependencies
+        for nested_dep in dependency.dependencies:
+            if nested_dep != calc.name:  # Avoid self-references
+                self._propagate_parameters(calc, nested_dep, visited)
     
     def extract_sheets(self) -> None:
         """Extract information about worksheets and their dependencies."""
@@ -410,36 +463,46 @@ class TableauWorkbookAnalyzer:
                 calculations_used = []
                 parameters_used = []
                 
-                # Check all fields used in the view
-                view_items = self._xpath(ws, './/t:view-item')
-                for item in view_items:
-                    column_name = item.get('column', '').strip('[]')
-                    if column_name in self.calculations:
-                        calculations_used.append(column_name)
-                        if sheet_name not in self.calculations[column_name].used_in:
-                            self.calculations[column_name].used_in.append(sheet_name)
-                        
-                        # Add datasource from the calculation
-                        calc = self.calculations[column_name]
-                        if calc.datasource:
-                            datasources.add(calc.datasource)
+                # ENHANCE: Check more places calculations might be used in worksheets
+                # 1. Check all fields in view-items (main visualization)
+                self._check_fields_in_element(ws, './/t:view-item', 'column', sheet_name, 
+                                          calculations_used, parameters_used, datasources)
                 
-                # Check for parameter usage in filters
-                filters = self._xpath(ws, './/t:filter')
-                for filter_item in filters:
-                    column_name = filter_item.get('column', '').strip('[]')
-                    if column_name in self.parameters:
-                        parameters_used.append(column_name)
-                        if sheet_name not in self.parameters[column_name].used_in:
-                            self.parameters[column_name].used_in.append(sheet_name)
+                # 2. Check fields in shelves (columns/rows)
+                self._check_fields_in_element(ws, './/t:shelf', 'name', sheet_name,
+                                          calculations_used, parameters_used, datasources)
                 
-                # Add parameters used in calculations
+                # 3. Check fields in marks cards
+                self._check_fields_in_element(ws, './/t:encodings/t:encoding', 'field', sheet_name,
+                                          calculations_used, parameters_used, datasources)
+                
+                # 4. Check fields in filters
+                self._check_fields_in_element(ws, './/t:filter', 'column', sheet_name,
+                                          calculations_used, parameters_used, datasources)
+                                          
+                # 5. Check fields in tooltips
+                self._check_fields_in_element(ws, './/t:tooltip-field', 'name', sheet_name,
+                                          calculations_used, parameters_used, datasources)
+                
+                # Add parameters used in calculations (including indirect usage via calculation dependencies)
+                # First collect all parameters directly referenced
+                direct_params = set(parameters_used)
+                
+                # Then add parameters used indirectly through calculations
                 for calc_name in calculations_used:
-                    calc = self.calculations[calc_name]
-                    for param_name in self.parameters.keys():
-                        if f'[{param_name}]' in calc.formula or param_name in calc.formula:
-                            if param_name not in parameters_used:
+                    if calc_name in self.calculations:
+                        calc = self.calculations[calc_name]
+                        # Add all parameters used by this calculation
+                        for param_name in calc.parameters_used:
+                            if param_name in self.parameters and param_name not in parameters_used:
                                 parameters_used.append(param_name)
+                                # Also update the parameter.used_in list for bidirectional reference
+                                if sheet_name not in self.parameters[param_name].used_in:
+                                    self.parameters[param_name].used_in.append(sheet_name)
+                
+                # Remove duplicates and sort for consistency
+                calculations_used = sorted(list(set(calculations_used)))
+                parameters_used = sorted(list(set(parameters_used)))
                 
                 self.sheets[sheet_name] = Sheet(
                     name=sheet_name,
@@ -448,10 +511,85 @@ class TableauWorkbookAnalyzer:
                     parameters_used=parameters_used
                 )
                 
-                logger.debug(f"Sheet {sheet_name} uses datasources: {datasources}")
+                logger.debug(f"Sheet {sheet_name} uses {len(calculations_used)} calculations, {len(parameters_used)} parameters, and {len(datasources)} datasources")
         except Exception as e:
             logger.error(f"Failed to extract sheets: {e}")
             raise
+            
+    def _check_fields_in_element(self, worksheet, xpath_expr, attr_name, sheet_name, 
+                               calculations_used, parameters_used, datasources):
+        """Helper to check for fields used in various worksheet elements.
+        
+        Args:
+            worksheet: The worksheet element to search within
+            xpath_expr: XPath to find elements that might use fields/calculations
+            attr_name: Attribute name containing field references
+            sheet_name: Name of the current sheet
+            calculations_used: List to append found calculations to
+            parameters_used: List to append found parameters to
+            datasources: Set to add datasources to
+        """
+        elements = self._xpath(worksheet, xpath_expr)
+        for element in elements:
+            # Get the field name and clean it
+            field_name = element.get(attr_name, '').strip('[]')
+            if not field_name:
+                continue
+                
+            # Check if it's a calculation and update bidirectional references
+            if field_name in self.calculations:
+                if field_name not in calculations_used:
+                    calculations_used.append(field_name)
+                
+                # Update calculation's used_in list (bidirectional reference)
+                if sheet_name not in self.calculations[field_name].used_in:
+                    self.calculations[field_name].used_in.append(sheet_name)
+                
+                # Add datasource from the calculation
+                calc = self.calculations[field_name]
+                if calc.datasource:
+                    datasources.add(calc.datasource)
+                    
+                # Also check if this calculation depends on other calculations
+                # and add those to the list as well (indirect usage)
+                self._add_dependent_calculations(field_name, sheet_name, calculations_used)
+            
+            # Check if it's a parameter and update bidirectional references
+            elif field_name in self.parameters:
+                if field_name not in parameters_used:
+                    parameters_used.append(field_name)
+                
+                # Update parameter's used_in list (bidirectional reference)
+                if sheet_name not in self.parameters[field_name].used_in:
+                    self.parameters[field_name].used_in.append(sheet_name)
+                    
+    def _add_dependent_calculations(self, calc_name, sheet_name, calculations_used, visited=None):
+        """Recursively add calculations that the given calculation depends on."""
+        if visited is None:
+            visited = set()
+            
+        # Avoid circular dependencies
+        if calc_name in visited:
+            return
+            
+        visited.add(calc_name)
+        
+        if calc_name not in self.calculations:
+            return
+            
+        # Get dependencies of this calculation
+        calc = self.calculations[calc_name]
+        for dep_name in calc.dependencies:
+            if dep_name not in calculations_used and dep_name in self.calculations:
+                # Add to the list of calculations used in this sheet
+                calculations_used.append(dep_name)
+                
+                # Update the calculation's used_in list (bidirectional reference)
+                if sheet_name not in self.calculations[dep_name].used_in:
+                    self.calculations[dep_name].used_in.append(sheet_name)
+                    
+                # Recursively add nested dependencies
+                self._add_dependent_calculations(dep_name, sheet_name, calculations_used, visited)
 
     def extract_dashboards(self) -> None:
         """Extract dashboard information."""
@@ -558,48 +696,107 @@ class ReportGenerator:
     @staticmethod
     def generate_calculations_report(calculations: Dict[str, Calculation], output_path: str) -> None:
         """Generate CSV report for calculations."""
-        calc_data = [
-            {
+        calc_data = []
+        
+        for calc_name, calc in calculations.items():
+            # Ensure no duplicates in lists - convert to sets and back to lists for sorting
+            used_in = sorted(list(set(calc.used_in))) if calc.used_in else []
+            dependencies = sorted(list(set(calc.dependencies))) if calc.dependencies else []
+            params_used = sorted(list(set(calc.parameters_used))) if calc.parameters_used else []
+            
+            # Determine if calculation references fields from other datasources
+            cross_source = 'No'
+            if any('.' in dep for dep in dependencies):
+                cross_source = 'Yes'
+                
+            calc_data.append({
                 'Calculation Name': calc.name,
                 'Data Source': calc.datasource,
                 'Formula': calc.formula,
-                'Used In Sheets': ', '.join(calc.used_in),
-                'Dependencies': ', '.join(sorted(calc.dependencies)) if calc.dependencies else 'None',
-                'Parameters Used': ', '.join(sorted(calc.parameters_used)) if calc.parameters_used else 'None',
-                'Cross-Source': 'Yes' if any('.' in dep for dep in calc.dependencies) else 'No'
-            }
-            for calc in calculations.values()
-        ]
+                'Used In Sheets': ', '.join(used_in) if used_in else 'None',
+                'Dependencies': ', '.join(dependencies) if dependencies else 'None',
+                'Parameters Used': ', '.join(params_used) if params_used else 'None',
+                'Cross-Source': cross_source,
+                'Dependency Count': len(dependencies),
+                'Sheet Usage Count': len(used_in)
+            })
+        
+        # Sort calculations by dependency count (most complex first)
+        calc_data.sort(key=lambda x: (-x['Dependency Count'], -x['Sheet Usage Count'], x['Calculation Name']))
+        
+        # Remove temporary columns used for sorting
+        for item in calc_data:
+            del item['Dependency Count']
+            del item['Sheet Usage Count']
+            
         pd.DataFrame(calc_data).to_csv(output_path, index=False)
     
     @staticmethod
     def generate_sheets_report(sheets: Dict[str, Sheet], output_path: str) -> None:
         """Generate CSV report for sheets."""
-        sheet_data = [
-            {
+        sheet_data = []
+        
+        for sheet_name, sheet in sheets.items():
+            # Remove duplicates and sort lists for consistency
+            datasources = sorted(list(set(sheet.datasources)))
+            calcs_used = sorted(list(set(sheet.calculations_used)))
+            params_used = sorted(list(set(sheet.parameters_used))) if sheet.parameters_used else []
+            
+            sheet_data.append({
                 'Sheet Name': sheet.name,
-                'Data Sources': ', '.join(sheet.datasources),
-                'Calculations Used': ', '.join(sheet.calculations_used),
-                'Parameters Used': ', '.join(sheet.parameters_used) if sheet.parameters_used else 'None'
-            }
-            for sheet in sheets.values()
-        ]
+                'Data Sources': ', '.join(datasources) if datasources else 'None',
+                'Calculations Used': ', '.join(calcs_used) if calcs_used else 'None',
+                'Parameters Used': ', '.join(params_used) if params_used else 'None',
+                'Calculation Count': len(calcs_used),
+                'Parameter Count': len(params_used)
+            })
+        
+        # Sort sheets by complexity (number of calculations and parameters)
+        sheet_data.sort(key=lambda x: (-x['Calculation Count'], -x['Parameter Count'], x['Sheet Name']))
+        
+        # Remove temporary columns used for sorting
+        for item in sheet_data:
+            del item['Calculation Count']
+            del item['Parameter Count']
+        
         pd.DataFrame(sheet_data).to_csv(output_path, index=False)
 
     @staticmethod
     def generate_parameters_report(parameters: Dict[str, Parameter], output_path: str) -> None:
         """Generate CSV report for parameters."""
-        param_data = [
-            {
+        param_data = []
+        
+        for param_name, param in parameters.items():
+            # Remove duplicates and sort lists
+            used_in = sorted(list(set(param.used_in))) if param.used_in else []
+            used_in_calcs = sorted(list(set(param.used_in_calculations))) if param.used_in_calculations else []
+            
+            # Format range/values appropriately
+            range_values = ''
+            if param.range_min or param.range_max:
+                range_values = f"{param.range_min or ''} to {param.range_max or ''}"
+            elif param.allowed_values:
+                range_values = ', '.join(param.allowed_values)
+            else:
+                range_values = 'N/A'
+                
+            param_data.append({
                 'Parameter Name': param.name,
                 'Data Type': param.datatype,
                 'Current Value': param.current_value,
-                'Range/Values': f"{param.range_min or ''} to {param.range_max or ''}" if param.range_min or param.range_max else ', '.join(param.allowed_values) if param.allowed_values else 'N/A',
-                'Used In Sheets': ', '.join(sorted(set(param.used_in))) if param.used_in else 'None',
-                'Used In Calculations': ', '.join(sorted(set(param.used_in_calculations))) if param.used_in_calculations else 'None'
-            }
-            for param in parameters.values()
-        ]
+                'Range/Values': range_values,
+                'Used In Sheets': ', '.join(used_in) if used_in else 'None',
+                'Used In Calculations': ', '.join(used_in_calcs) if used_in_calcs else 'None',
+                'Usage Count': len(used_in) + len(used_in_calcs)
+            })
+        
+        # Sort parameters by usage (most used first)
+        param_data.sort(key=lambda x: (-x['Usage Count'], x['Parameter Name']))
+        
+        # Remove temporary column used for sorting
+        for item in param_data:
+            del item['Usage Count']
+            
         pd.DataFrame(param_data).to_csv(output_path, index=False)
 
     @staticmethod
@@ -608,26 +805,54 @@ class ReportGenerator:
         dashboard_data = [
             {
                 'Dashboard Name': dashboard.name,
-                'Sheets': ', '.join(dashboard.sheets)
+                'Sheets': ', '.join(sorted(list(set(dashboard.sheets)))) if dashboard.sheets else 'None',
+                'Sheet Count': len(dashboard.sheets)
             }
             for dashboard in dashboards.values()
         ]
+        
+        # Sort dashboards by complexity (number of sheets)
+        dashboard_data.sort(key=lambda x: (-x['Sheet Count'], x['Dashboard Name']))
+        
+        # Remove temporary column used for sorting
+        for item in dashboard_data:
+            del item['Sheet Count']
+            
         pd.DataFrame(dashboard_data).to_csv(output_path, index=False)
 
     @staticmethod
     def generate_actions_report(actions: Dict[str, Action], output_path: str) -> None:
         """Generate CSV report for actions."""
-        action_data = [
-            {
+        action_data = []
+        
+        for action_name, action in actions.items():
+            # Determine the action type properly
+            action_type = action.type
+            if not action_type:
+                if action.url:
+                    action_type = 'URL'
+                elif action.target_dashboard:
+                    action_type = 'Navigation'
+                elif action.target_sheet and action.target_field:
+                    action_type = 'Filter'
+                else:
+                    action_type = 'Unknown'
+                    
+            # Determine the target appropriately
+            target = action.target_sheet or action.target_dashboard or action.url or ''
+                    
+            action_data.append({
                 'Action Name': action.name,
-                'Type': action.type or 'url' if action.url else 'unknown',
+                'Type': action_type,
                 'Source Sheet': action.source_sheet,
-                'Target': action.target_sheet or action.target_dashboard or action.url or '',
+                'Target': target,
                 'Source Field': action.source_field,
                 'Target Field': action.target_field
-            }
-            for action in actions.values()
-        ]
+            })
+            
+        # Sort actions by type and name
+        action_data.sort(key=lambda x: (x['Type'], x['Action Name']))
+        
         pd.DataFrame(action_data).to_csv(output_path, index=False)
 
     @staticmethod
@@ -637,11 +862,12 @@ class ReportGenerator:
             {
                 'Hierarchy Name': hierarchy.name,
                 'Data Source': hierarchy.datasource,
-                'Levels': ' → '.join(hierarchy.levels)
+                'Levels': ' → '.join(hierarchy.levels),
+                'Level Count': len(hierarchy.levels)
             }
             for hierarchy in hierarchies.values()
         ]
-        pd.DataFrame(hierarchy_data).to_csv(output_path, index=False)
+        
 
 def main():
     if len(sys.argv) != 2:
@@ -658,25 +884,71 @@ def main():
         output_dir = "output_files"
         os.makedirs(output_dir, exist_ok=True)
         
+        logger.info(f"Starting analysis of workbook: {workbook_path}")
+        logger.info("Initializing Tableau Workbook Analyzer...")
         analyzer = TableauWorkbookAnalyzer(workbook_path)
+        
+        logger.info("Extracting XML content...")
         analyzer.extract_xml()
+        
+        logger.info("Extracting parameters...")
         analyzer.extract_parameters()
+        logger.info(f"Found {len(analyzer.parameters)} parameters")
+        
+        logger.info("Extracting data sources...")
         analyzer.extract_data_sources()
+        logger.info(f"Found {len(analyzer.data_sources)} data sources")
+        
+        logger.info("Extracting calculated fields...")
         analyzer.extract_calculations()
+        logger.info(f"Found {len(analyzer.calculations)} calculated fields")
+        
+        logger.info("Extracting sheets and their dependencies...")
         analyzer.extract_sheets()
+        logger.info(f"Found {len(analyzer.sheets)} worksheets")
+        
+        logger.info("Extracting dashboards...")
         analyzer.extract_dashboards()
+        logger.info(f"Found {len(analyzer.dashboards)} dashboards")
+        
+        logger.info("Extracting actions...")
         analyzer.extract_actions()
+        logger.info(f"Found {len(analyzer.actions)} actions")
+        
+        logger.info("Extracting hierarchies...")
         analyzer.extract_hierarchies()
+        logger.info(f"Found {len(analyzer.hierarchies)} hierarchies")
         
+        logger.info("Generating reports...")
         report_generator = ReportGenerator()
-        report_generator.generate_data_sources_report(analyzer.data_sources, os.path.join(output_dir, 'data_sources_report.csv'))
-        report_generator.generate_calculations_report(analyzer.calculations, os.path.join(output_dir, 'calculations_report.csv'))
-        report_generator.generate_sheets_report(analyzer.sheets, os.path.join(output_dir, 'sheets_report.csv'))
-        report_generator.generate_parameters_report(analyzer.parameters, os.path.join(output_dir, 'parameters_report.csv'))
-        report_generator.generate_dashboards_report(analyzer.dashboards, os.path.join(output_dir, 'dashboards_report.csv'))
-        report_generator.generate_actions_report(analyzer.actions, os.path.join(output_dir, 'actions_report.csv'))
-        report_generator.generate_hierarchies_report(analyzer.hierarchies, os.path.join(output_dir, 'hierarchies_report.csv'))
         
+        # Generate all reports
+        report_generator.generate_data_sources_report(
+            analyzer.data_sources, os.path.join(output_dir, 'data_sources_report.csv'))
+        
+        report_generator.generate_calculations_report(
+            analyzer.calculations, os.path.join(output_dir, 'calculations_report.csv'))
+        
+        report_generator.generate_sheets_report(
+            analyzer.sheets, os.path.join(output_dir, 'sheets_report.csv'))
+        
+        report_generator.generate_parameters_report(
+            analyzer.parameters, os.path.join(output_dir, 'parameters_report.csv'))
+        
+        report_generator.generate_dashboards_report(
+            analyzer.dashboards, os.path.join(output_dir, 'dashboards_report.csv'))
+        
+        report_generator.generate_actions_report(
+            analyzer.actions, os.path.join(output_dir, 'actions_report.csv'))
+        
+        report_generator.generate_hierarchies_report(
+            analyzer.hierarchies, os.path.join(output_dir, 'hierarchies_report.csv'))
+            
+        # Generate summary report
+        report_generator.generate_summary_report(
+            analyzer, os.path.join(output_dir, 'workbook_summary.csv'))
+        
+        # Print success message
         logger.info("Analysis complete! Generated reports in 'output_files' directory:")
         logger.info("- data_sources_report.csv")
         logger.info("- calculations_report.csv")
@@ -685,9 +957,17 @@ def main():
         logger.info("- dashboards_report.csv")
         logger.info("- actions_report.csv")
         logger.info("- hierarchies_report.csv")
+        logger.info("- workbook_summary.csv")
+        
+        print("\nAnalysis complete! Generated reports in 'output_files' directory.")
+        print(f"Found {len(analyzer.calculations)} calculations, {len(analyzer.parameters)} parameters, and {len(analyzer.sheets)} sheets.")
+        print("See the CSV files for detailed information about your Tableau workbook.")
+        
     except Exception as e:
         logger.error(f"Analysis failed: {e}")
+        logger.exception("Detailed error information:")
+        print(f"Error: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
-    main() 
+    main()
