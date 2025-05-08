@@ -61,15 +61,15 @@ python analyze_tableau_workbook.py path/to/your/workbook.twb
 
 ## Output Reports
 
-The tool generates seven CSV reports:
+The tool generates seven CSV reports in the `output_files` directory:
 
-1. `data_sources_report.csv`
+1. `output_files/data_sources_report.csv`
    - Data source names
    - Server information
    - Database details
    - Tables/fields used
 
-2. `calculations_report.csv`
+2. `output_files/calculations_report.csv`
    - Calculation names
    - Formulas
    - Usage in sheets
@@ -77,33 +77,35 @@ The tool generates seven CSV reports:
    - Parameter references
    - Cross-source calculations
 
-3. `sheets_report.csv`
+3. `output_files/sheets_report.csv`
    - Sheet names
    - Data sources used
    - Calculations used
    - Parameters used
 
-4. `parameters_report.csv`
+4. `output_files/parameters_report.csv`
    - Parameter names
    - Data types
    - Current values
    - Range/allowed values
    - Usage in sheets and calculations
 
-5. `dashboards_report.csv`
+5. `output_files/dashboards_report.csv`
    - Dashboard names
    - Contained sheets
 
-6. `actions_report.csv`
+6. `output_files/actions_report.csv`
    - Action names
    - Types
    - Source and target information
    - Field mappings
 
-7. `hierarchies_report.csv`
+7. `output_files/hierarchies_report.csv`
    - Hierarchy names
    - Associated data sources
    - Level definitions
+
+The `output_files` directory will be created automatically if it doesn't exist.
 
 ## Logging
 
