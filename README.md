@@ -30,7 +30,7 @@ A Python tool for analyzing Tableau workbooks (.twb or .twbx files) and generati
 
 1. Clone this repository:
    ```bash
-   git clone [repository-url]
+   git clone https://github.com/alexanderakbik/tableau_buddy.git
    cd tableau-workbook-analyzer
    ```
 
