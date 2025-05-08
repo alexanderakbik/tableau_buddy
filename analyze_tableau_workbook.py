@@ -654,6 +654,10 @@ def main():
         sys.exit(1)
     
     try:
+        # Create output directory if it doesn't exist
+        output_dir = "output_files"
+        os.makedirs(output_dir, exist_ok=True)
+        
         analyzer = TableauWorkbookAnalyzer(workbook_path)
         analyzer.extract_xml()
         analyzer.extract_parameters()
@@ -665,15 +669,15 @@ def main():
         analyzer.extract_hierarchies()
         
         report_generator = ReportGenerator()
-        report_generator.generate_data_sources_report(analyzer.data_sources, 'data_sources_report.csv')
-        report_generator.generate_calculations_report(analyzer.calculations, 'calculations_report.csv')
-        report_generator.generate_sheets_report(analyzer.sheets, 'sheets_report.csv')
-        report_generator.generate_parameters_report(analyzer.parameters, 'parameters_report.csv')
-        report_generator.generate_dashboards_report(analyzer.dashboards, 'dashboards_report.csv')
-        report_generator.generate_actions_report(analyzer.actions, 'actions_report.csv')
-        report_generator.generate_hierarchies_report(analyzer.hierarchies, 'hierarchies_report.csv')
+        report_generator.generate_data_sources_report(analyzer.data_sources, os.path.join(output_dir, 'data_sources_report.csv'))
+        report_generator.generate_calculations_report(analyzer.calculations, os.path.join(output_dir, 'calculations_report.csv'))
+        report_generator.generate_sheets_report(analyzer.sheets, os.path.join(output_dir, 'sheets_report.csv'))
+        report_generator.generate_parameters_report(analyzer.parameters, os.path.join(output_dir, 'parameters_report.csv'))
+        report_generator.generate_dashboards_report(analyzer.dashboards, os.path.join(output_dir, 'dashboards_report.csv'))
+        report_generator.generate_actions_report(analyzer.actions, os.path.join(output_dir, 'actions_report.csv'))
+        report_generator.generate_hierarchies_report(analyzer.hierarchies, os.path.join(output_dir, 'hierarchies_report.csv'))
         
-        logger.info("Analysis complete! Generated reports:")
+        logger.info("Analysis complete! Generated reports in 'output_files' directory:")
         logger.info("- data_sources_report.csv")
         logger.info("- calculations_report.csv")
         logger.info("- sheets_report.csv")

@@ -8,7 +8,6 @@
       <column name="[Order Date]" datatype="date"/>
       <column name="[Region]" datatype="string"/>
       <column name="[Customer ID]" datatype="string"/>
-
       <column name="[Profit Ratio]" datatype="real">
         <calculation class="tableau" formula="[Profit]/[Sales]"/>
       </column>
@@ -21,25 +20,15 @@
       <column name="[Running Sales]" datatype="real">
         <calculation class="tableau" formula="RUNNING_SUM(SUM([Sales]))"/>
       </column>
-
-      <!-- Cross-source calculation #1 -->
       <column name="[Blended Profitability Score]" datatype="real">
-        <calculation class="tableau" formula="
-IF [Customers].[Customer Score] > 80 AND [Sales].[Profit] > 500 AND [Products].[Final Price] > 100 THEN
-  ([Sales].[Profit] * [Customers].[Customer Score]) / [Products].[Final Price]
-ELSE
-  0
-END
-"/>
+        <calculation class="tableau" formula="IF [Customers].[Customer Score] > 80 AND [Sales].[Profit] > 500 AND [Products].[Final Price] > 100 THEN ([Sales].[Profit] * [Customers].[Customer Score]) / [Products].[Final Price] ELSE 0 END"/>
       </column>
     </datasource>
-
     <datasource name="Customers" hasextract="false" inline="true">
       <column name="[Customer ID]" datatype="string"/>
       <column name="[Customer Segment]" datatype="string"/>
       <column name="[Region]" datatype="string"/>
       <column name="[Name]" datatype="string"/>
-
       <column name="[VIP Flag]" datatype="boolean">
         <calculation class="tableau" formula="[Customer Segment] = 'VIP'"/>
       </column>
@@ -47,7 +36,6 @@ END
         <calculation class="tableau" formula="IF [VIP Flag] THEN 100 ELSE 50 END"/>
       </column>
     </datasource>
-
     <datasource name="Products" hasextract="false" inline="true">
       <column name="[Product ID]" datatype="string"/>
       <column name="[Sub-Category]" datatype="string"/>
@@ -57,18 +45,11 @@ END
       <column name="[Final Price]" datatype="real">
         <calculation class="tableau" formula="[Base Price] + ([Base Price] * [Margin])"/>
       </column>
-
-      <!-- Cross-source calculation #2 -->
       <column name="[Cross Source Profit Check]" datatype="string">
-        <calculation class="tableau" formula="
-IF [Sales].[Profit Ratio] > 0.2 AND [Customers].[Customer Score] > 75 THEN 'High Margin High Value'
-ELSEIF [Sales].[Profit Ratio] < 0.1 AND [Customers].[Customer Score] < 50 THEN 'Low Margin Low Value'
-ELSE 'Mid Tier'
-"/>
+        <calculation class="tableau" formula="IF [Sales].[Profit Ratio] > 0.2 AND [Customers].[Customer Score] > 75 THEN 'High Margin High Value' ELSEIF [Sales].[Profit Ratio] < 0.1 AND [Customers].[Customer Score] < 50 THEN 'Low Margin Low Value' ELSE 'Mid Tier' END"/>
       </column>
     </datasource>
   </datasources>
-
   <parameters>
     <parameter name="Sales Cutoff" datatype="real" current-value="1000">
       <range min="0" max="10000"/>
@@ -81,7 +62,6 @@ ELSE 'Mid Tier'
       </list>
     </parameter>
   </parameters>
-
   <worksheets>
     <worksheet name="Sales View">
       <table>
@@ -94,7 +74,6 @@ ELSE 'Mid Tier'
         </view>
       </table>
     </worksheet>
-
     <worksheet name="Customer Detail">
       <table>
         <view>
@@ -105,7 +84,6 @@ ELSE 'Mid Tier'
         </view>
       </table>
     </worksheet>
-
     <worksheet name="Product Metrics">
       <table>
         <view>
@@ -115,7 +93,6 @@ ELSE 'Mid Tier'
         </view>
       </table>
     </worksheet>
-
     <worksheet name="Combined Dashboard Logic">
       <table>
         <view>
@@ -127,7 +104,6 @@ ELSE 'Mid Tier'
       </table>
     </worksheet>
   </worksheets>
-
   <dashboards>
     <dashboard name="Full Executive Dashboard">
       <dashboard-item type="worksheet" name="Sales View"/>
@@ -136,7 +112,6 @@ ELSE 'Mid Tier'
       <dashboard-item type="worksheet" name="Combined Dashboard Logic"/>
     </dashboard>
   </dashboards>
-
   <actions>
     <action name="Region Filter" type="filter">
       <source-sheet>Sales View</source-sheet>
@@ -145,7 +120,6 @@ ELSE 'Mid Tier'
       <target-field>Region</target-field>
     </action>
   </actions>
-
   <hierarchies>
     <hierarchy name="Product Hierarchy">
       <level name="Category"/>
