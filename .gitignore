@@ -1,3 +1,7 @@
+# Tableau workbooks
+*.twbx
+*.twb
+
 # Python
 __pycache__/
 *.py[cod]
@@ -49,4 +53,7 @@ Repository/
 
 # Jupyter Notebook
 .ipynb_checkpoints
-*.ipynb 
+*.ipynb
+
+# New additions from the code block
+output_files/ 
