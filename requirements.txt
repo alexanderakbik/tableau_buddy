@@ -9,6 +9,10 @@ six>=1.16.0
 tzdata>=2023.3
 dataclasses>=0.6; python_version < '3.7'
 chardet>=5.0.0
+plotly>=5.18.0
+streamlit>=1.32.0
+tableauserverclient>=0.25
+xmltodict>=0.13.0
 
 # Development dependencies
 pytest>=7.0.0
