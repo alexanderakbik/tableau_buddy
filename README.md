@@ -1,132 +1,124 @@
-# Tableau Buddy
+# Tableau Workbook Analyzer
 
-A Python tool for analyzing Tableau workbooks (.twb or .twbx files) and generating detailed reports about their structure and dependencies.
+A Python tool for analyzing Tableau workbooks (.twb/.twbx) and generating comprehensive reports and DBT project suggestions.
+
+Current version: 1.0.0
 
 ## Features
 
-- Analyzes both .twb and .twbx files
-- Extracts and reports on:
-  - Data Sources
-  - Calculated Fields
-  - Worksheets
-  - Parameters
-  - Dashboards
-  - Actions
-  - Hierarchies
-- Identifies dependencies between calculations
-- Tracks parameter usage across sheets and calculations
-- Generates detailed CSV reports for easy analysis
+- Extracts and analyzes Tableau workbook components:
+  - Data sources and their connections
+  - Calculated fields and their dependencies
+  - Worksheets and their components
+  - Dashboards and their layouts
+  - Parameters and their usage
+  - Actions and their configurations
+  - Hierarchies and their levels
 
-## Requirements
+- Generates detailed reports in CSV format:
+  - Data sources report
+  - Calculations report
+  - Sheets report
+  - Parameters report
+  - Dashboards report
+  - Actions report
+  - Hierarchies report
+  - Workbook summary
 
-- Python 3.x
-- Required packages:
-  ```
-  pandas>=2.0.0
-  lxml>=4.9.0
-  ```
+- Provides architectural recommendations:
+  - Backend offload suggestions
+  - Calculation consolidation opportunities
+  - Hierarchy management recommendations
+  - Filter optimization strategies
+  - Parameter usage improvements
+  - Data source integration suggestions
+
+- Generates a suggested DBT project structure:
+  - Staging models for each data source
+  - Intermediate models for calculations
+  - Mart models based on dashboard groupings
+  - Source definitions and configurations
 
 ## Installation
 
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/alexanderakbik/tableau_buddy.git
-   cd tableau-workbook-analyzer
-   ```
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/tableau_buddy.git
+cd tableau_buddy
+```
 
-2. Create and activate a virtual environment (recommended):
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate  # On Windows, use: venv\Scripts\activate
-   ```
+2. Create and activate a virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
 
-3. Install the required packages:
-   ```bash
-   pip install -r requirements.txt
-   ```
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+4. Verify installation:
+```bash
+python analyze_tableau_workbook.py --version
+```
 
 ## Usage
 
-Run the analyzer by providing the path to your Tableau workbook:
-
+Run the analyzer on a Tableau workbook:
 ```bash
-python analyze_tableau_workbook.py path/to/your/workbook.twbx
+python analyze_tableau_workbook.py "path/to/your/workbook.twbx"
 ```
 
-Or for .twb files:
+The tool will generate the following outputs in the `output_files` directory:
+- CSV reports for each component type
+- Architecture recommendations in Markdown format
+- A suggested DBT project structure
 
-```bash
-python analyze_tableau_workbook.py path/to/your/workbook.twb
-```
+## Output Structure
 
-## Output Reports
+The `output_files` directory contains:
+- `data_sources_report.csv`: Details of all data sources
+- `calculations_report.csv`: All calculated fields and their dependencies
+- `sheets_report.csv`: Worksheet information and their components
+- `parameters_report.csv`: Parameter details and usage
+- `dashboards_report.csv`: Dashboard layouts and contained sheets
+- `actions_report.csv`: Action configurations
+- `hierarchies_report.csv`: Hierarchy definitions
+- `workbook_summary.csv`: Overall workbook statistics
+- `backend_offload_recommendations.csv`: Suggestions for moving calculations to backend
+- `architecture_recommendations.md`: Detailed architectural improvement suggestions
+- `suggested_dbt_project/`: Generated DBT project structure
 
-The tool generates seven CSV reports in the `output_files` directory:
+## DBT Project Structure
 
-1. `output_files/data_sources_report.csv`
-   - Data source names
-   - Server information
-   - Database details
-   - Tables/fields used
+The generated DBT project includes:
+- `models/staging/`: Source-specific staging models
+- `models/intermediate/`: Calculation-based intermediate models
+- `models/marts/`: Dashboard-aligned mart models
+- `models/staging/sources.yml`: Source definitions
+- `dbt_project.yml`: Project configuration
 
-2. `output_files/calculations_report.csv`
-   - Calculation names
-   - Formulas
-   - Usage in sheets
-   - Dependencies
-   - Parameter references
-   - Cross-source calculations
+## Requirements
 
-3. `output_files/sheets_report.csv`
-   - Sheet names
-   - Data sources used
-   - Calculations used
-   - Parameters used
-
-4. `output_files/parameters_report.csv`
-   - Parameter names
-   - Data types
-   - Current values
-   - Range/allowed values
-   - Usage in sheets and calculations
-
-5. `output_files/dashboards_report.csv`
-   - Dashboard names
-   - Contained sheets
-
-6. `output_files/actions_report.csv`
-   - Action names
-   - Types
-   - Source and target information
-   - Field mappings
-
-7. `output_files/hierarchies_report.csv`
-   - Hierarchy names
-   - Associated data sources
-   - Level definitions
-
-The `output_files` directory will be created automatically if it doesn't exist.
-
-## Logging
-
-The tool provides detailed logging at the DEBUG level, helping you track:
-- File extraction process
-- XML parsing details
-- Element discovery and processing
-- Any errors or issues encountered
-
-## Error Handling
-
-The tool includes robust error handling for:
-- Missing or invalid files
-- XML parsing issues
-- Namespace resolution
-- Missing or malformed elements
+- Python 3.8 or higher
+- Dependencies listed in requirements.txt:
+  - pandas>=2.0.0
+  - lxml>=4.9.0
+  - numpy>=1.24.0
+  - python-dateutil>=2.8.2
+  - pytz>=2023.3
+  - six>=1.16.0
+  - tzdata>=2023.3
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
 
-## Author
+## License
 
-Alexander Akbik
+This project is licensed under the MIT License - see the LICENSE file for details.
